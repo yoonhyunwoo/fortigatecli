@@ -40,6 +40,14 @@ type readOptions struct {
 	interval   time.Duration
 }
 
+type shapeOptions struct {
+	query      string
+	selectors  []string
+	flatten    bool
+	flattenSep string
+	columns    []string
+}
+
 func newReadOptions() *readOptions {
 	return &readOptions{
 		start:    -1,
@@ -47,6 +55,10 @@ func newReadOptions() *readOptions {
 		limit:    -1,
 		interval: 5 * time.Second,
 	}
+}
+
+func newShapeOptions() *shapeOptions {
+	return &shapeOptions{flattenSep: "."}
 }
 
 func bindReadFlags(cmd *cobra.Command, opts *readOptions) {
@@ -91,6 +103,14 @@ func bindDiscoveryCapabilitiesFlags(cmd *cobra.Command, probe *bool) {
 	cmd.Flags().BoolVar(probe, "probe", false, "probe the target resource for schema endpoint support")
 }
 
+func bindShapeFlags(cmd *cobra.Command, opts *shapeOptions) {
+	cmd.Flags().StringVar(&opts.query, "query", "", "local selector applied to the response payload")
+	cmd.Flags().StringArrayVar(&opts.selectors, "select", nil, "repeatable local field projection")
+	cmd.Flags().BoolVar(&opts.flatten, "flatten", false, "flatten nested objects for local output shaping")
+	cmd.Flags().StringVar(&opts.flattenSep, "flatten-sep", ".", "separator for flattened keys")
+	cmd.Flags().StringSliceVar(&opts.columns, "columns", nil, "ordered output columns for shaped rows")
+}
+
 func (o *readOptions) toAPIOptions() fortigate.ReadOptions {
 	count := o.count
 	if count < 0 && o.limit >= 0 {
@@ -108,8 +128,22 @@ func (o *readOptions) toAPIOptions() fortigate.ReadOptions {
 	}
 }
 
+func (o *shapeOptions) toOutputOptions() output.ShapeOptions {
+	if o == nil {
+		return output.ShapeOptions{}
+	}
+	return output.ShapeOptions{
+		Query:      o.query,
+		Select:     append([]string(nil), o.selectors...),
+		Flatten:    o.flatten,
+		FlattenSep: o.flattenSep,
+		Columns:    append([]string(nil), o.columns...),
+	}
+}
+
 func newReadAliasCommand(rootOpts *rootOptions, alias readAlias) *cobra.Command {
 	readOpts := newReadOptions()
+	shapeOpts := newShapeOptions()
 	cmd := &cobra.Command{
 		Use:   alias.use,
 		Short: alias.short,
@@ -118,12 +152,10 @@ func newReadAliasCommand(rootOpts *rootOptions, alias readAlias) *cobra.Command 
 			if err != nil {
 				return err
 			}
-
 			client, err := newClient(cfg)
 			if err != nil {
 				return output.NewError("client_error", err.Error(), nil)
 			}
-
 			ctx, cancel := commandContext()
 			defer cancel()
 
@@ -137,11 +169,11 @@ func newReadAliasCommand(rootOpts *rootOptions, alias readAlias) *cobra.Command 
 			if err != nil {
 				return err
 			}
-
-			return render(cmd, rootOpts.output, envelope)
+			return renderRead(cmd, rootOpts.output, envelope, shapeOpts)
 		},
 	}
 	bindReadFlags(cmd, readOpts)
+	bindShapeFlags(cmd, shapeOpts)
 	setDefaultStreams(cmd)
 	return cmd
 }
@@ -152,16 +184,13 @@ func (o *readOptions) toMonitorAPIOptions(spec *monitorEndpointSpec) (fortigate.
 			return fortigate.ReadOptions{}, err
 		}
 	}
-
 	options := o.toAPIOptions()
 	options = mergeReadOptions(spec, options)
-
 	filters, err := o.monitorShortcutFilters()
 	if err != nil {
 		return fortigate.ReadOptions{}, err
 	}
 	options.Filters = append(options.Filters, filters...)
-
 	return options, nil
 }
 
@@ -169,11 +198,7 @@ func mergeReadOptions(spec *monitorEndpointSpec, options fortigate.ReadOptions) 
 	if spec == nil {
 		return options
 	}
-
-	merged := fortigate.ReadOptions{
-		Start: -1,
-		Count: -1,
-	}
+	merged := fortigate.ReadOptions{Start: -1, Count: -1}
 	merged.Filters = append([]string{}, spec.defaultQuery.Filters...)
 	merged.Fields = append([]string{}, spec.defaultQuery.Fields...)
 	merged.Formats = append([]string{}, spec.defaultQuery.Formats...)
@@ -252,7 +277,6 @@ func (o *readOptions) monitorShortcutFilters() ([]string, error) {
 		{values: o.contains, operator: "=@", name: "--contains"},
 		{values: o.prefix, operator: "=@", name: "--prefix"},
 	}
-
 	var filters []string
 	for _, shortcut := range shortcuts {
 		for _, raw := range shortcut.values {
@@ -277,9 +301,7 @@ func translateShortcut(flag string, operator string, raw string) (string, error)
 	return strings.TrimSpace(field) + operator + strings.TrimSpace(value), nil
 }
 
-func (o *readOptions) watchEnabled() bool {
-	return o.watch || o.follow
-}
+func (o *readOptions) watchEnabled() bool { return o.watch || o.follow }
 
 func parseDiscoveryTarget(raw string) (fortigate.DiscoveryTarget, error) {
 	switch raw {
@@ -293,9 +315,7 @@ func parseDiscoveryTarget(raw string) (fortigate.DiscoveryTarget, error) {
 }
 
 func (o *readOptions) toDiscoverySchemaOptions() fortigate.DiscoverySchemaOptions {
-	return fortigate.DiscoverySchemaOptions{
-		WithMeta: o.withMeta,
-	}
+	return fortigate.DiscoverySchemaOptions{WithMeta: o.withMeta}
 }
 
 func (o *readOptions) toDiscoveryFieldOptions() fortigate.DiscoveryFieldOptions {
@@ -323,7 +343,6 @@ func readCommandContext(cmd *cobra.Command, watch bool) (context.Context, contex
 func runRead(cmd *cobra.Command, format string, watch bool, interval time.Duration, reader envelopeReader) error {
 	ctx, cancel := readCommandContext(cmd, watch)
 	defer cancel()
-
 	if !watch {
 		envelope, err := reader(ctx)
 		if err != nil {
@@ -331,7 +350,6 @@ func runRead(cmd *cobra.Command, format string, watch bool, interval time.Durati
 		}
 		return render(cmd, format, envelope)
 	}
-
 	return runWatchedRead(ctx, interval, reader, func(envelope *fortigate.Envelope) error {
 		return render(cmd, format, envelope)
 	})
@@ -341,7 +359,6 @@ func runWatchedRead(ctx context.Context, interval time.Duration, reader envelope
 	if interval <= 0 {
 		interval = 5 * time.Second
 	}
-
 	envelope, err := reader(ctx)
 	if err != nil {
 		return err
@@ -353,10 +370,8 @@ func runWatchedRead(ctx context.Context, interval time.Duration, reader envelope
 	if err := renderFn(envelope); err != nil {
 		return err
 	}
-
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
-
 	for {
 		select {
 		case <-ctx.Done():

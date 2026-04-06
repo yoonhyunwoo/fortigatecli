@@ -92,6 +92,13 @@ func render(cmd *cobra.Command, format string, value any) error {
 	return nil
 }
 
+func renderRead(cmd *cobra.Command, format string, value any, shapeOpts *shapeOptions) error {
+	if err := output.WriteShaped(cmd.OutOrStdout(), format, value, shapeOpts.toOutputOptions()); err != nil {
+		return output.NewError("output_error", err.Error(), nil)
+	}
+	return nil
+}
+
 func normalizeError(err error) error {
 	var cfgErr *output.CLIError
 	if errors.As(err, &cfgErr) {
