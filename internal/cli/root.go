@@ -43,6 +43,7 @@ func newRootCommand() *cobra.Command {
 	cmd.AddCommand(
 		newAuthCommand(opts),
 		newSystemCommand(opts),
+		newRoutingCommand(opts),
 		newCMDBCommand(opts),
 		newMonitorCommand(opts),
 		newRawCommand(opts),
