@@ -3,7 +3,7 @@ package cli
 import "testing"
 
 func TestSystemReadAliases(t *testing.T) {
-	got := map[string]systemAlias{}
+	got := map[string]readAlias{}
 	for _, alias := range systemReadAliases {
 		got[alias.use] = alias
 	}
