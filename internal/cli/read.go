@@ -32,6 +32,9 @@ type readOptions struct {
 	prefix     []string
 	start      int
 	count      int
+	page       int
+	pageSize   int
+	all        bool
 	limit      int
 	withMeta   bool
 	datasource bool
@@ -53,6 +56,8 @@ func newReadOptions() *readOptions {
 	return &readOptions{
 		start:    -1,
 		count:    -1,
+		page:     -1,
+		pageSize: -1,
 		limit:    -1,
 		interval: 5 * time.Second,
 	}
@@ -69,6 +74,9 @@ func bindReadFlags(cmd *cobra.Command, opts *readOptions) {
 	cmd.Flags().StringArrayVar(&opts.sort, "sort", nil, "repeatable sort directive")
 	cmd.Flags().IntVar(&opts.start, "start", -1, "result offset")
 	cmd.Flags().IntVar(&opts.count, "count", -1, "result count limit")
+	cmd.Flags().IntVar(&opts.page, "page", -1, "1-based page number")
+	cmd.Flags().IntVar(&opts.pageSize, "page-size", -1, "page size for page-based reads")
+	cmd.Flags().BoolVar(&opts.all, "all", false, "follow server-provided next-page metadata until exhausted")
 	cmd.Flags().BoolVar(&opts.withMeta, "with-meta", false, "request metadata in the response")
 	cmd.Flags().BoolVar(&opts.datasource, "datasource", false, "request FortiGate datasource expansion")
 	cmd.Flags().BoolVar(&opts.allVDOMs, "all-vdoms", false, "read across all configured VDOMs")
@@ -119,12 +127,18 @@ func (o *readOptions) toAPIOptions() fortigate.ReadOptions {
 		count = o.limit
 	}
 	return fortigate.ReadOptions{
-		Filters:    append([]string{}, o.filters...),
-		Fields:     append([]string{}, o.fields...),
-		Formats:    append([]string{}, o.formats...),
-		Sort:       append([]string{}, o.sort...),
-		Start:      o.start,
-		Count:      count,
+		Filters: append([]string{}, o.filters...),
+		Fields:  append([]string{}, o.fields...),
+		Formats: append([]string{}, o.formats...),
+		Sort:    append([]string{}, o.sort...),
+		Start:   o.start,
+		Count:   count,
+		Page: fortigate.PageOptions{
+			Start:    o.start,
+			Count:    count,
+			Page:     o.page,
+			PageSize: o.pageSize,
+		},
 		WithMeta:   o.withMeta,
 		Datasource: o.datasource,
 	}

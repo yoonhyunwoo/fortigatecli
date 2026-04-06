@@ -31,8 +31,16 @@ type ReadOptions struct {
 	Sort       []string
 	Start      int
 	Count      int
+	Page       PageOptions
 	WithMeta   bool
 	Datasource bool
+}
+
+type PageOptions struct {
+	Start    int
+	Count    int
+	Page     int
+	PageSize int
 }
 
 type Client struct {
@@ -104,6 +112,10 @@ func (c *Client) GetMonitorAcrossVDOMs(ctx context.Context, resourcePath string,
 }
 
 func (c *Client) GetCMDB(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
+	return c.GetCMDBResource(ctx, resourcePath, options)
+}
+
+func (c *Client) GetCMDBResource(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
 	return c.get(ctx, "/api/v2/cmdb/"+strings.TrimPrefix(resourcePath, "/"), options, addReadOptions)
 }
 
@@ -111,6 +123,12 @@ func (c *Client) GetCMDBAcrossVDOMs(ctx context.Context, resourcePath string, op
 	return c.readAcrossVDOMs(ctx, resourcePath, options, func(client *Client, ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
 		return client.GetCMDB(ctx, resourcePath, options)
 	})
+}
+
+func (c *Client) GetCMDBObject(ctx context.Context, resourcePath string, mkey string, options ReadOptions) (*Envelope, error) {
+	resource := strings.TrimPrefix(resourcePath, "/")
+	objectPath := resource + "/" + url.PathEscape(mkey)
+	return c.get(ctx, "/api/v2/cmdb/"+objectPath, options, addReadOptions)
 }
 
 func (c *Client) GetLog(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
@@ -425,9 +443,17 @@ func addReadOptions(query url.Values, options ReadOptions) {
 	}
 	if options.Start >= 0 {
 		query.Set("start", fmt.Sprintf("%d", options.Start))
+	} else if options.Page.Start > 0 {
+		query.Set("start", fmt.Sprintf("%d", options.Page.Start))
+	} else if options.Page.Page > 0 && options.Page.PageSize > 0 {
+		query.Set("start", fmt.Sprintf("%d", (options.Page.Page-1)*options.Page.PageSize))
 	}
 	if options.Count >= 0 {
 		query.Set("count", fmt.Sprintf("%d", options.Count))
+	} else if options.Page.Count > 0 {
+		query.Set("count", fmt.Sprintf("%d", options.Page.Count))
+	} else if options.Page.PageSize > 0 {
+		query.Set("count", fmt.Sprintf("%d", options.Page.PageSize))
 	}
 	if options.WithMeta {
 		query.Set("with_meta", "true")

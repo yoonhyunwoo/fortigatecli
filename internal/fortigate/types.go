@@ -1,19 +1,59 @@
 package fortigate
 
+type PageRange struct {
+	Start int `json:"start,omitempty"`
+	End   int `json:"end,omitempty"`
+}
+
+type EnvelopeMeta struct {
+	Count int        `json:"count,omitempty"`
+	Range *PageRange `json:"range,omitempty"`
+	Next  string     `json:"next,omitempty"`
+}
+
 type Envelope struct {
-	HTTPMethod string `json:"http_method,omitempty"`
-	Status     string `json:"status,omitempty"`
-	HTTPStatus int    `json:"http_status,omitempty"`
-	Path       string `json:"path,omitempty"`
-	Name       string `json:"name,omitempty"`
-	VDOM       string `json:"vdom,omitempty"`
-	Serial     string `json:"serial,omitempty"`
-	Version    string `json:"version,omitempty"`
-	Build      int    `json:"build,omitempty"`
-	Revision   string `json:"revision,omitempty"`
-	Results    any    `json:"results,omitempty"`
-	Error      int    `json:"error,omitempty"`
-	Message    string `json:"message,omitempty"`
+	HTTPMethod string        `json:"http_method,omitempty"`
+	Status     string        `json:"status,omitempty"`
+	HTTPStatus int           `json:"http_status,omitempty"`
+	Path       string        `json:"path,omitempty"`
+	Name       string        `json:"name,omitempty"`
+	VDOM       string        `json:"vdom,omitempty"`
+	Serial     string        `json:"serial,omitempty"`
+	Version    string        `json:"version,omitempty"`
+	Build      int           `json:"build,omitempty"`
+	Revision   string        `json:"revision,omitempty"`
+	Results    any           `json:"results,omitempty"`
+	Meta       *EnvelopeMeta `json:"meta,omitempty"`
+	Count      int           `json:"count,omitempty"`
+	Range      *PageRange    `json:"range,omitempty"`
+	Next       string        `json:"next,omitempty"`
+	Error      int           `json:"error,omitempty"`
+	Message    string        `json:"message,omitempty"`
+}
+
+func (e *Envelope) Paging() EnvelopeMeta {
+	if e == nil {
+		return EnvelopeMeta{}
+	}
+
+	meta := EnvelopeMeta{
+		Count: e.Count,
+		Range: e.Range,
+		Next:  e.Next,
+	}
+	if e.Meta == nil {
+		return meta
+	}
+	if meta.Count == 0 {
+		meta.Count = e.Meta.Count
+	}
+	if meta.Range == nil {
+		meta.Range = e.Meta.Range
+	}
+	if meta.Next == "" {
+		meta.Next = e.Meta.Next
+	}
+	return meta
 }
 
 type VDOMResult struct {
