@@ -51,6 +51,7 @@ func newRootCommand() *cobra.Command {
 		newFirewallCommand(opts),
 		newCMDBCommand(opts),
 		newMonitorCommand(opts),
+		newDiscoveryCommand(opts),
 		newVPNCommand(opts),
 		newRawCommand(opts),
 		newVersionCommand(),

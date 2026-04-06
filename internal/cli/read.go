@@ -76,6 +76,21 @@ func bindObservabilityReadFlags(cmd *cobra.Command, opts *readOptions) {
 	cmd.Flags().DurationVar(&opts.interval, "interval", 5*time.Second, "watch poll interval")
 }
 
+func bindDiscoverySchemaFlags(cmd *cobra.Command, opts *readOptions) {
+	cmd.Flags().BoolVar(&opts.withMeta, "with-meta", false, "request metadata in the response")
+}
+
+func bindDiscoveryFieldFlags(cmd *cobra.Command, opts *readOptions) {
+	cmd.Flags().StringArrayVar(&opts.filters, "filter", nil, "repeatable API filter")
+	cmd.Flags().IntVar(&opts.count, "count", -1, "result count limit")
+	cmd.Flags().BoolVar(&opts.withMeta, "with-meta", false, "request metadata in the response")
+	cmd.Flags().BoolVar(&opts.datasource, "datasource", false, "request FortiGate datasource expansion")
+}
+
+func bindDiscoveryCapabilitiesFlags(cmd *cobra.Command, probe *bool) {
+	cmd.Flags().BoolVar(probe, "probe", false, "probe the target resource for schema endpoint support")
+}
+
 func (o *readOptions) toAPIOptions() fortigate.ReadOptions {
 	count := o.count
 	if count < 0 && o.limit >= 0 {
@@ -264,6 +279,32 @@ func translateShortcut(flag string, operator string, raw string) (string, error)
 
 func (o *readOptions) watchEnabled() bool {
 	return o.watch || o.follow
+}
+
+func parseDiscoveryTarget(raw string) (fortigate.DiscoveryTarget, error) {
+	switch raw {
+	case string(fortigate.DiscoveryTargetCMDB):
+		return fortigate.DiscoveryTargetCMDB, nil
+	case string(fortigate.DiscoveryTargetMonitor):
+		return fortigate.DiscoveryTargetMonitor, nil
+	default:
+		return "", fmt.Errorf("unsupported discovery target %q: must be cmdb or monitor", raw)
+	}
+}
+
+func (o *readOptions) toDiscoverySchemaOptions() fortigate.DiscoverySchemaOptions {
+	return fortigate.DiscoverySchemaOptions{
+		WithMeta: o.withMeta,
+	}
+}
+
+func (o *readOptions) toDiscoveryFieldOptions() fortigate.DiscoveryFieldOptions {
+	return fortigate.DiscoveryFieldOptions{
+		Filters:    o.filters,
+		Count:      o.count,
+		WithMeta:   o.withMeta,
+		Datasource: o.datasource,
+	}
 }
 
 type envelopeReader func(context.Context) (*fortigate.Envelope, error)

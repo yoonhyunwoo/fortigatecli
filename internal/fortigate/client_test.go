@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -364,5 +365,161 @@ func TestVPNWrappersUseExpectedPaths(t *testing.T) {
 		if paths[i] != want {
 			t.Fatalf("path[%d] = %q, want %q", i, paths[i], want)
 		}
+	}
+}
+
+func TestGetDiscoverySchemaBuildsSchemaRequest(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/v2/cmdb/firewall/address" {
+			t.Fatalf("path = %q", got)
+		}
+		if got := r.URL.Query().Get("action"); got != "schema" {
+			t.Fatalf("action query = %q", got)
+		}
+		if got := r.URL.Query().Get("with_meta"); got != "true" {
+			t.Fatalf("with_meta query = %q", got)
+		}
+		_, _ = io.WriteString(w, `{"status":"success","http_status":200,"results":{"mkey":"name"}}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	report, err := client.GetDiscoverySchema(context.Background(), DiscoveryTargetCMDB, "firewall/address", DiscoverySchemaOptions{
+		WithMeta: true,
+	})
+	if err != nil {
+		t.Fatalf("GetDiscoverySchema() error = %v", err)
+	}
+	if report.Source != "api" {
+		t.Fatalf("Source = %q", report.Source)
+	}
+}
+
+func TestGetDiscoverySchemaReturnsUnsupportedReport(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+		_, _ = io.WriteString(w, `{"status":"error","http_status":404,"message":"schema not found"}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	report, err := client.GetDiscoverySchema(context.Background(), DiscoveryTargetMonitor, "system/status", DiscoverySchemaOptions{})
+	if err != nil {
+		t.Fatalf("GetDiscoverySchema() error = %v", err)
+	}
+	if report.Source != "unsupported" {
+		t.Fatalf("Source = %q", report.Source)
+	}
+	if report.Error == "" {
+		t.Fatal("expected unsupported error message")
+	}
+}
+
+func TestDiscoverFieldsUsesAllowedReadOptions(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		if got := r.URL.Path; got != "/api/v2/monitor/system/interface" {
+			t.Fatalf("path = %q", got)
+		}
+		if got := query["filter"]; len(got) != 1 || got[0] != "name==port1" {
+			t.Fatalf("filter query = %#v", got)
+		}
+		if got := query.Get("count"); got != "2" {
+			t.Fatalf("count query = %q", got)
+		}
+		if got := query.Get("with_meta"); got != "true" {
+			t.Fatalf("with_meta query = %q", got)
+		}
+		if got := query.Get("datasource"); got != "true" {
+			t.Fatalf("datasource query = %q", got)
+		}
+		if got := query.Get("fields"); got != "" {
+			t.Fatalf("fields query = %q, want empty", got)
+		}
+		_, _ = io.WriteString(w, `{"status":"success","http_status":200,"results":[{"name":"port1","status":"up"},{"name":"port2","status":true,"mtu":1500}]}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	report, err := client.DiscoverFields(context.Background(), DiscoveryTargetMonitor, "system/interface", DiscoveryFieldOptions{
+		Filters:    []string{"name==port1"},
+		Count:      2,
+		WithMeta:   true,
+		Datasource: true,
+	})
+	if err != nil {
+		t.Fatalf("DiscoverFields() error = %v", err)
+	}
+	if report.SampleCount != 2 {
+		t.Fatalf("SampleCount = %d", report.SampleCount)
+	}
+	wantFields := []string{"mtu", "name", "status"}
+	if !slices.Equal(report.Fields, wantFields) {
+		t.Fatalf("Fields = %#v, want %#v", report.Fields, wantFields)
+	}
+	if got := report.InferredTypes["status"]; !slices.Equal(got, []string{"bool", "string"}) {
+		t.Fatalf("status types = %#v", got)
+	}
+}
+
+func TestGetDiscoveryCapabilitiesProbeReflectsSchemaSupport(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusMethodNotAllowed)
+		_, _ = io.WriteString(w, `{"status":"error","http_status":405,"message":"invalid action"}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	report, err := client.GetDiscoveryCapabilities(context.Background(), DiscoveryTargetCMDB, "firewall/address", DiscoveryCapabilityOptions{
+		Probe: true,
+	})
+	if err != nil {
+		t.Fatalf("GetDiscoveryCapabilities() error = %v", err)
+	}
+	if report.ProbeResult == nil {
+		t.Fatal("ProbeResult = nil")
+	}
+	if report.ProbeResult.SchemaSupported {
+		t.Fatal("SchemaSupported = true, want false")
 	}
 }

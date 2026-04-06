@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"path"
+	"sort"
 	"strings"
 	"time"
 )
@@ -135,6 +136,103 @@ func (c *Client) GetSSLVPNSettings(ctx context.Context, options ReadOptions) (*E
 
 func (c *Client) ListSSLVPNSessions(ctx context.Context, options ReadOptions) (*Envelope, error) {
 	return c.GetMonitor(ctx, "vpn/ssl", options)
+}
+
+func (c *Client) GetDiscoverySchema(ctx context.Context, target DiscoveryTarget, resourcePath string, options DiscoverySchemaOptions) (*SchemaReport, error) {
+	apiPath, err := discoveryAPIPath(target, resourcePath)
+	if err != nil {
+		return nil, err
+	}
+
+	schemaPath := apiPath + "?action=schema"
+	envelope, err := c.get(ctx, schemaPath, ReadOptions{WithMeta: options.WithMeta})
+	if err != nil {
+		if apiErr, ok := err.(*APIError); ok && isUnsupportedSchemaError(apiErr) {
+			return &SchemaReport{
+				Target:   target,
+				Path:     strings.TrimPrefix(resourcePath, "/"),
+				Endpoint: schemaPath,
+				Source:   "unsupported",
+				Error:    apiErr.Message,
+				Schema:   apiErr.Detail,
+			}, nil
+		}
+		return nil, err
+	}
+
+	return &SchemaReport{
+		Target:   target,
+		Path:     strings.TrimPrefix(resourcePath, "/"),
+		Endpoint: schemaPath,
+		Source:   "api",
+		Schema:   envelope.Results,
+	}, nil
+}
+
+func (c *Client) DiscoverFields(ctx context.Context, target DiscoveryTarget, resourcePath string, options DiscoveryFieldOptions) (*FieldReport, error) {
+	apiOptions := ReadOptions{
+		Filters:    options.Filters,
+		Count:      options.Count,
+		WithMeta:   options.WithMeta,
+		Datasource: options.Datasource,
+	}
+
+	var (
+		envelope *Envelope
+		err      error
+	)
+	switch target {
+	case DiscoveryTargetCMDB:
+		envelope, err = c.GetCMDB(ctx, resourcePath, apiOptions)
+	case DiscoveryTargetMonitor:
+		envelope, err = c.GetMonitor(ctx, resourcePath, apiOptions)
+	default:
+		return nil, &APIError{
+			Operation: "discover_fields",
+			Message:   fmt.Sprintf("unsupported discovery target %q", target),
+		}
+	}
+	if err != nil {
+		return nil, err
+	}
+
+	fields, inferredTypes, sampleCount := inferFields(envelope.Results)
+	return &FieldReport{
+		Target:        target,
+		Path:          strings.TrimPrefix(resourcePath, "/"),
+		SampleCount:   sampleCount,
+		Fields:        fields,
+		InferredTypes: inferredTypes,
+		Source:        "sample",
+	}, nil
+}
+
+func (c *Client) GetDiscoveryCapabilities(ctx context.Context, target DiscoveryTarget, resourcePath string, options DiscoveryCapabilityOptions) (*CapabilityReport, error) {
+	report := &CapabilityReport{
+		Target:                   target,
+		Path:                     strings.TrimPrefix(resourcePath, "/"),
+		SupportsSchema:           true,
+		SupportsFieldExploration: true,
+		SupportedQueryFlags: map[string][]string{
+			"schema":       []string{"with-meta"},
+			"fields":       []string{"filter", "count", "with-meta", "datasource"},
+			"capabilities": []string{"probe"},
+		},
+	}
+
+	if !options.Probe {
+		return report, nil
+	}
+
+	schemaReport, err := c.GetDiscoverySchema(ctx, target, resourcePath, DiscoverySchemaOptions{})
+	if err != nil {
+		return nil, err
+	}
+	report.ProbeResult = &DiscoveryProbeResult{
+		SchemaSupported: schemaReport.Source == "api",
+		Error:           schemaReport.Error,
+	}
+	return report, nil
 }
 
 func (c *Client) Backup(ctx context.Context) ([]byte, error) {
@@ -285,6 +383,100 @@ func addLogReadOptions(query url.Values, options ReadOptions) {
 	}
 	if options.Datasource {
 		query.Set("datasource", "true")
+	}
+}
+
+func discoveryAPIPath(target DiscoveryTarget, resourcePath string) (string, error) {
+	normalizedPath := strings.TrimPrefix(resourcePath, "/")
+	switch target {
+	case DiscoveryTargetCMDB:
+		return "/api/v2/cmdb/" + normalizedPath, nil
+	case DiscoveryTargetMonitor:
+		return "/api/v2/monitor/" + normalizedPath, nil
+	default:
+		return "", &APIError{
+			Operation: "discovery_path",
+			Message:   fmt.Sprintf("unsupported discovery target %q", target),
+		}
+	}
+}
+
+func isUnsupportedSchemaError(err *APIError) bool {
+	if err == nil {
+		return false
+	}
+	if err.Code == http.StatusNotFound || err.Code == http.StatusMethodNotAllowed {
+		return true
+	}
+	if err.Code == http.StatusBadRequest {
+		message := strings.ToLower(err.Message)
+		return strings.Contains(message, "invalid") || strings.Contains(message, "not found") || strings.Contains(message, "schema")
+	}
+	return false
+}
+
+func inferFields(results any) ([]string, map[string][]string, int) {
+	fieldTypes := map[string]map[string]struct{}{}
+	sampleCount := 0
+
+	addObjectFields := func(values map[string]any) {
+		sampleCount++
+		for key, value := range values {
+			typesForField, ok := fieldTypes[key]
+			if !ok {
+				typesForField = map[string]struct{}{}
+				fieldTypes[key] = typesForField
+			}
+			typesForField[valueKind(value)] = struct{}{}
+		}
+	}
+
+	switch typed := results.(type) {
+	case map[string]any:
+		addObjectFields(typed)
+	case []any:
+		for _, item := range typed {
+			if object, ok := item.(map[string]any); ok {
+				addObjectFields(object)
+			}
+		}
+	}
+
+	fields := make([]string, 0, len(fieldTypes))
+	for field := range fieldTypes {
+		fields = append(fields, field)
+	}
+	sort.Strings(fields)
+
+	inferredTypes := make(map[string][]string, len(fieldTypes))
+	for _, field := range fields {
+		typesForField := make([]string, 0, len(fieldTypes[field]))
+		for kind := range fieldTypes[field] {
+			typesForField = append(typesForField, kind)
+		}
+		sort.Strings(typesForField)
+		inferredTypes[field] = typesForField
+	}
+
+	return fields, inferredTypes, sampleCount
+}
+
+func valueKind(value any) string {
+	switch value.(type) {
+	case nil:
+		return "null"
+	case bool:
+		return "bool"
+	case string:
+		return "string"
+	case float64:
+		return "number"
+	case []any:
+		return "array"
+	case map[string]any:
+		return "object"
+	default:
+		return fmt.Sprintf("%T", value)
 	}
 }
 
