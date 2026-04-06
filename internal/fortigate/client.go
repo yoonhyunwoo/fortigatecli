@@ -104,6 +104,27 @@ func (c *Client) RawGet(ctx context.Context, apiPath string, options ReadOptions
 	return c.get(ctx, normalized, options)
 }
 
+func (c *Client) GetVPNIPsecStatus(ctx context.Context, options ReadOptions) (*Envelope, error) {
+	return c.GetMonitor(ctx, "vpn/ipsec", options)
+}
+
+func (c *Client) ListVPNIPsecTunnels(ctx context.Context, options ReadOptions) (*Envelope, error) {
+	return c.GetMonitor(ctx, "vpn/ipsec", options)
+}
+
+func (c *Client) GetVPNIPsecTunnel(ctx context.Context, tunnelName string, options ReadOptions) (*Envelope, error) {
+	options.Filters = append([]string{fmt.Sprintf("name==%s", tunnelName)}, options.Filters...)
+	return c.GetMonitor(ctx, "vpn/ipsec", options)
+}
+
+func (c *Client) GetSSLVPNSettings(ctx context.Context, options ReadOptions) (*Envelope, error) {
+	return c.GetCMDB(ctx, "vpn.ssl/settings", options)
+}
+
+func (c *Client) ListSSLVPNSessions(ctx context.Context, options ReadOptions) (*Envelope, error) {
+	return c.GetMonitor(ctx, "vpn/ssl", options)
+}
+
 func (c *Client) Backup(ctx context.Context) ([]byte, error) {
 	u := *c.baseURL
 	u.Path = "/api/v2/monitor/system/config/backup"

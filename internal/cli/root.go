@@ -45,6 +45,7 @@ func newRootCommand() *cobra.Command {
 		newSystemCommand(opts),
 		newCMDBCommand(opts),
 		newMonitorCommand(opts),
+		newVPNCommand(opts),
 		newRawCommand(opts),
 		newVersionCommand(),
 	)
