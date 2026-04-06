@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+
 	"fortigatecli/internal/fortigate"
 	"fortigatecli/internal/output"
 
@@ -12,10 +13,7 @@ var systemReadAliases = []readAlias{
 	{use: "admins", short: "List configured admin users", path: "system/admin", kind: "cmdb"},
 	{use: "dns", short: "Fetch DNS configuration", path: "system/dns", kind: "cmdb"},
 	{use: "ntp", short: "Fetch NTP configuration", path: "system/ntp", kind: "cmdb"},
-	{use: "interfaces", short: "List system interfaces", path: "system/interface", kind: "monitor"},
 	{use: "vdoms", short: "List configured VDOMs", path: "system/vdom", kind: "cmdb"},
-	{use: "ha-status", short: "Fetch HA status", path: "system/ha-status", kind: "monitor"},
-	{use: "license", short: "Fetch license status", path: "license/status", kind: "monitor"},
 }
 
 func newSystemCommand(rootOpts *rootOptions) *cobra.Command {
@@ -31,6 +29,9 @@ func newSystemCommand(rootOpts *rootOptions) *cobra.Command {
 		newSystemInterfaceCommand(rootOpts),
 		newSystemHAPeersCommand(rootOpts),
 	)
+	for _, spec := range systemMonitorCompatibilitySpecs() {
+		systemCmd.AddCommand(newSystemMonitorAliasCommand(rootOpts, spec))
+	}
 	for _, alias := range systemReadAliases {
 		systemCmd.AddCommand(newReadAliasCommand(rootOpts, alias))
 	}
@@ -299,4 +300,22 @@ func firstValue(values map[string]any, keys ...string) (any, bool) {
 		}
 	}
 	return nil, false
+}
+
+func newSystemMonitorAliasCommand(rootOpts *rootOptions, spec monitorEndpointSpec) *cobra.Command {
+	readOpts := newReadOptions()
+	cmd := &cobra.Command{
+		Use:   spec.use,
+		Short: spec.short,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			options, err := monitorOptionsOrError(readOpts, &spec)
+			if err != nil {
+				return err
+			}
+			return runMonitor(rootOpts, cmd, spec.path, options)
+		},
+	}
+	bindMonitorReadFlags(cmd, readOpts)
+	setDefaultStreams(cmd)
+	return cmd
 }
