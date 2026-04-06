@@ -46,6 +46,12 @@ func TestGetMonitorAddsAuthorizationAndVDOM(t *testing.T) {
 
 func TestBackupReturnsBody(t *testing.T) {
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("scope"); got != string(BackupScopeGlobal) {
+			t.Fatalf("scope query = %q", got)
+		}
+		if got := r.URL.Query().Get("vdom"); got != "" {
+			t.Fatalf("vdom query = %q, want empty", got)
+		}
 		_, _ = io.WriteString(w, "config-version=FGT\n")
 	}))
 	defer server.Close()
@@ -61,13 +67,91 @@ func TestBackupReturnsBody(t *testing.T) {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	data, err := client.Backup(context.Background())
+	data, err := client.BackupWithOptions(context.Background(), BackupOptions{})
 	if err != nil {
 		t.Fatalf("Backup() error = %v", err)
 	}
 
 	if string(data) != "config-version=FGT\n" {
 		t.Fatalf("Backup() = %q", string(data))
+	}
+}
+
+func TestBackupUsesVDOMScopeAndQuery(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("scope"); got != string(BackupScopeVDOM) {
+			t.Fatalf("scope query = %q", got)
+		}
+		if got := r.URL.Query().Get("vdom"); got != "edge" {
+			t.Fatalf("vdom query = %q", got)
+		}
+		_, _ = io.WriteString(w, "config-version=FGT\n")
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	data, err := client.BackupWithOptions(context.Background(), BackupOptions{
+		Scope: BackupScopeVDOM,
+		VDOM:  "edge",
+	})
+	if err != nil {
+		t.Fatalf("Backup() error = %v", err)
+	}
+
+	if string(data) != "config-version=FGT\n" {
+		t.Fatalf("Backup() = %q", string(data))
+	}
+}
+
+func TestBackupPlanRejectsUnsupportedScope(t *testing.T) {
+	client, err := NewClient(Config{
+		BaseURL:  "https://fortigate.example.com",
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.BackupPlan(BackupOptions{Scope: BackupScope("invalid")})
+	if err == nil {
+		t.Fatal("BackupPlan() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "unsupported backup scope") {
+		t.Fatalf("BackupPlan() error = %v", err)
+	}
+}
+
+func TestBackupPlanUsesClientVDOMByDefault(t *testing.T) {
+	client, err := NewClient(Config{
+		BaseURL:  "https://fortigate.example.com",
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	plan, err := client.BackupPlan(BackupOptions{Scope: BackupScopeVDOM})
+	if err != nil {
+		t.Fatalf("BackupPlan() error = %v", err)
+	}
+	if plan.VDOM != "root" {
+		t.Fatalf("BackupPlan().VDOM = %q", plan.VDOM)
 	}
 }
 

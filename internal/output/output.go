@@ -5,12 +5,15 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"reflect"
 	"sort"
 	"strconv"
 	"strings"
 	"text/tabwriter"
 	"unicode"
+
+	"fortigatecli/internal/fortigate"
 )
 
 type CLIError struct {
@@ -87,6 +90,47 @@ func NewError(code, message string, detail any) *CLIError {
 	return &CLIError{Code: code, Message: message, Detail: detail}
 }
 
+func WriteFileAtomic(path string, data []byte, overwrite bool) (err error) {
+	if path == "" {
+		return fmt.Errorf("output path is required")
+	}
+	if !overwrite {
+		if _, statErr := os.Stat(path); statErr == nil {
+			return fmt.Errorf("output file already exists: %s", path)
+		} else if !os.IsNotExist(statErr) {
+			return statErr
+		}
+	}
+	dir := filepath.Dir(path)
+	file := filepath.Base(path)
+	temp, err := os.CreateTemp(dir, "."+file+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	defer func() {
+		if err != nil {
+			_ = os.Remove(tempPath)
+		}
+	}()
+	if _, err = temp.Write(data); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err = temp.Chmod(0o600); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err = temp.Sync(); err != nil {
+		_ = temp.Close()
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
+}
+
 func writeJSON(w io.Writer, value any) error {
 	encoder := json.NewEncoder(w)
 	encoder.SetIndent("", "  ")
@@ -108,7 +152,6 @@ func shapeValue(value any, opts ShapeOptions) (shapeResult, error) {
 	} else {
 		target = defaultShapeTarget(value)
 	}
-
 	columns := []string(nil)
 	if len(opts.Select) > 0 {
 		var err error
@@ -117,11 +160,9 @@ func shapeValue(value any, opts ShapeOptions) (shapeResult, error) {
 			return shapeResult{}, err
 		}
 	}
-
 	if opts.Flatten {
 		target = flattenValue(target, defaultFlattenSep(opts.FlattenSep))
 	}
-
 	rows, discoveredColumns := normalizeRows(target)
 	if len(columns) == 0 {
 		columns = discoveredColumns
@@ -129,7 +170,6 @@ func shapeValue(value any, opts ShapeOptions) (shapeResult, error) {
 	if len(opts.Columns) > 0 {
 		columns = append([]string(nil), opts.Columns...)
 	}
-
 	return shapeResult{value: target, rows: rows, columns: columns}, nil
 }
 
@@ -421,6 +461,10 @@ func writeTable(w io.Writer, value any) error {
 		return writeRowsTable(w, rows, nil)
 	}
 	switch v := value.(type) {
+	case *fortigate.Envelope:
+		return writeEnvelopeTable(w, v)
+	case fortigate.Envelope:
+		return writeEnvelopeTable(w, &v)
 	case map[string]any:
 		return writeMapTable(w, v)
 	default:
@@ -468,6 +512,139 @@ func extractTableRows(value any) ([]map[string]any, bool) {
 	return extractTableRows(results)
 }
 
+func writeEnvelopeTable(w io.Writer, envelope *fortigate.Envelope) error {
+	if envelope == nil {
+		return writeJSON(w, envelope)
+	}
+	switch results := envelope.Results.(type) {
+	case map[string]any:
+		if err := writeMapTable(w, results); err != nil {
+			return err
+		}
+	case []any:
+		if err := writeListTable(w, results); err != nil {
+			return writeJSON(w, envelope)
+		}
+	default:
+		return writeJSON(w, envelope)
+	}
+	return writePagingMeta(w, envelope.Paging())
+}
+
+func writeMapTable(w io.Writer, value map[string]any) error {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	for _, key := range keys {
+		if _, err := fmt.Fprintf(tw, "%s\t%v\n", key, value[key]); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+func writeListTable(w io.Writer, rows []any) error {
+	if len(rows) == 0 {
+		_, err := fmt.Fprintln(w, "(empty)")
+		return err
+	}
+	objects := make([]map[string]any, 0, len(rows))
+	for _, row := range rows {
+		object, ok := row.(map[string]any)
+		if !ok {
+			return fmt.Errorf("non-object row")
+		}
+		objects = append(objects, object)
+	}
+	headers := commonKeys(objects)
+	if len(headers) == 0 {
+		return fmt.Errorf("no common keys")
+	}
+	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+	if _, err := fmt.Fprintln(tw, strings.Join(headers, "\t")); err != nil {
+		return err
+	}
+	for _, row := range objects {
+		values := make([]string, 0, len(headers))
+		for _, header := range headers {
+			values = append(values, formatTableValue(row[header]))
+		}
+		if _, err := fmt.Fprintln(tw, strings.Join(values, "\t")); err != nil {
+			return err
+		}
+	}
+	return tw.Flush()
+}
+
+func commonKeys(rows []map[string]any) []string {
+	if len(rows) == 0 {
+		return nil
+	}
+	counts := map[string]int{}
+	for _, key := range sortedKeys(rows[0]) {
+		counts[key] = 1
+	}
+	for _, row := range rows[1:] {
+		for key := range counts {
+			if _, ok := row[key]; ok {
+				counts[key]++
+				continue
+			}
+			delete(counts, key)
+		}
+	}
+	keys := make([]string, 0, len(counts))
+	for key, count := range counts {
+		if count == len(rows) {
+			keys = append(keys, key)
+		}
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func sortedKeys(value map[string]any) []string {
+	keys := make([]string, 0, len(value))
+	for key := range value {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}
+
+func stringifyCell(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	default:
+		data, err := json.Marshal(typed)
+		if err == nil {
+			return string(data)
+		}
+		return fmt.Sprint(typed)
+	}
+}
+
+func formatTableValue(value any) string {
+	switch typed := value.(type) {
+	case nil:
+		return ""
+	case string:
+		return typed
+	default:
+		data, err := json.Marshal(typed)
+		if err != nil {
+			return fmt.Sprintf("%v", typed)
+		}
+		return string(data)
+	}
+}
+
 func writeRowsTable(w io.Writer, rows []map[string]any, columns []string) error {
 	if len(rows) == 0 {
 		_, err := fmt.Fprintln(w, "no results")
@@ -501,32 +678,28 @@ func writeRowsTable(w io.Writer, rows []map[string]any, columns []string) error 
 	return tw.Flush()
 }
 
-func writeMapTable(w io.Writer, value map[string]any) error {
-	keys := make([]string, 0, len(value))
-	for key := range value {
-		keys = append(keys, key)
+func writePagingMeta(w io.Writer, meta fortigate.EnvelopeMeta) error {
+	lines := make([]string, 0, 3)
+	if meta.Count > 0 {
+		lines = append(lines, fmt.Sprintf("count\t%d", meta.Count))
 	}
-	sort.Strings(keys)
+	if meta.Range != nil {
+		lines = append(lines, fmt.Sprintf("range\t%d-%d", meta.Range.Start, meta.Range.End))
+	}
+	if meta.Next != "" {
+		lines = append(lines, fmt.Sprintf("next\t%s", meta.Next))
+	}
+	if len(lines) == 0 {
+		return nil
+	}
+	if _, err := fmt.Fprintln(w); err != nil {
+		return err
+	}
 	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	for _, key := range keys {
-		if _, err := fmt.Fprintf(tw, "%s\t%v\n", key, value[key]); err != nil {
+	for _, line := range lines {
+		if _, err := fmt.Fprintln(tw, line); err != nil {
 			return err
 		}
 	}
 	return tw.Flush()
-}
-
-func stringifyCell(value any) string {
-	switch typed := value.(type) {
-	case nil:
-		return ""
-	case string:
-		return typed
-	default:
-		data, err := json.Marshal(typed)
-		if err == nil {
-			return string(data)
-		}
-		return fmt.Sprint(typed)
-	}
 }

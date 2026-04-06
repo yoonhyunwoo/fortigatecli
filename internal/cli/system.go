@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"context"
 	"fmt"
+	"strings"
 
 	"fortigatecli/internal/fortigate"
 	"fortigatecli/internal/output"
@@ -61,10 +63,37 @@ func newSystemStatusCommand(rootOpts *rootOptions) *cobra.Command {
 	return cmd
 }
 
+type backupRunner interface {
+	BackupWithOptions(context.Context, fortigate.BackupOptions) ([]byte, error)
+	BackupPlan(fortigate.BackupOptions) (*fortigate.BackupPlan, error)
+}
+
+type backupCommandOptions struct {
+	scope      string
+	outputPath string
+	force      bool
+	dryRun     bool
+}
+
+type backupDryRunReport struct {
+	URL    string `json:"url"`
+	Scope  string `json:"scope"`
+	VDOM   string `json:"vdom,omitempty"`
+	Output string `json:"output"`
+}
+
 func newSystemBackupCommand(rootOpts *rootOptions) *cobra.Command {
+	backupOpts := &backupCommandOptions{}
 	cmd := &cobra.Command{
 		Use:   "backup",
-		Short: "Print system config backup to stdout",
+		Short: "Print the system config backup to stdout",
+		Long: strings.Join([]string{
+			"Print the system config backup to stdout.",
+			"",
+			"This command is stdout-only. Use `system backup export` to save",
+			"a backup to a file. Backup scope must be explicit: `global` omits",
+			"`vdom`, and `vdom` requires `--vdom`.",
+		}, "\n"),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := loadRuntimeConfig(rootOpts.vdom)
 			if err != nil {
@@ -76,15 +105,141 @@ func newSystemBackupCommand(rootOpts *rootOptions) *cobra.Command {
 			}
 			ctx, cancel := commandContext()
 			defer cancel()
-			data, err := client.Backup(ctx)
+			options, err := backupOpts.toAPIOptions(cmd, true)
+			if err != nil {
+				return err
+			}
+			data, err := client.BackupWithOptions(ctx, options)
 			if err != nil {
 				return err
 			}
 			return writeStdout(cmd, data)
 		},
 	}
+	cmd.Flags().StringVar(&backupOpts.scope, "scope", string(fortigate.BackupScopeGlobal), "backup scope: global or vdom")
+	cmd.AddCommand(newSystemBackupExportCommand(rootOpts))
 	setDefaultStreams(cmd)
 	return cmd
+}
+
+func newSystemBackupExportCommand(rootOpts *rootOptions) *cobra.Command {
+	backupOpts := &backupCommandOptions{}
+	cmd := &cobra.Command{
+		Use:   "export",
+		Short: "Export the system config backup to a file",
+		Long: strings.Join([]string{
+			"Export the system config backup to a file.",
+			"",
+			"Use `--output PATH` to write a file. Existing files are not",
+			"overwritten unless `--force` is set. `--output -` is the only",
+			"way to route export output to stdout. `--dry-run` prints the",
+			"request URL and destination without creating a file.",
+		}, "\n"),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadRuntimeConfig(rootOpts.vdom)
+			if err != nil {
+				return err
+			}
+
+			client, err := newClient(cfg)
+			if err != nil {
+				return output.NewError("client_error", err.Error(), nil)
+			}
+
+			options, err := backupOpts.toAPIOptions(cmd, false)
+			if err != nil {
+				return err
+			}
+
+			return runBackupExport(cmd, client, rootOpts.output, options)
+		},
+	}
+	cmd.Flags().StringVar(&backupOpts.scope, "scope", string(fortigate.BackupScopeGlobal), "backup scope: global or vdom")
+	cmd.Flags().StringVar(&backupOpts.outputPath, "output", "", "write export output to PATH, or '-' for stdout")
+	cmd.Flags().BoolVar(&backupOpts.force, "force", false, "overwrite an existing output file")
+	cmd.Flags().BoolVar(&backupOpts.dryRun, "dry-run", false, "print the backup request and destination without writing a file")
+	setDefaultStreams(cmd)
+	return cmd
+}
+
+func runBackupExport(cmd *cobra.Command, client backupRunner, format string, options fortigate.BackupOptions) error {
+	plan, err := client.BackupPlan(options)
+	if err != nil {
+		return err
+	}
+
+	if options.DryRun {
+		return render(cmd, format, backupDryRunReport{
+			URL:    plan.URL,
+			Scope:  string(plan.Scope),
+			VDOM:   plan.VDOM,
+			Output: options.OutputPath,
+		})
+	}
+
+	ctx, cancel := commandContext()
+	defer cancel()
+
+	data, err := client.BackupWithOptions(ctx, options)
+	if err != nil {
+		return err
+	}
+
+	if options.Stdout {
+		return writeStdout(cmd, data)
+	}
+
+	if err := output.WriteFileAtomic(options.OutputPath, data, options.Overwrite); err != nil {
+		return output.NewError("file_error", err.Error(), nil)
+	}
+
+	return nil
+}
+
+func (o *backupCommandOptions) toAPIOptions(cmd *cobra.Command, allowImplicitStdout bool) (fortigate.BackupOptions, error) {
+	scope, err := parseBackupScope(o.scope)
+	if err != nil {
+		return fortigate.BackupOptions{}, err
+	}
+	vdomFlag := cmd.Flag("vdom")
+	if scope == fortigate.BackupScopeGlobal && vdomFlag != nil && vdomFlag.Changed {
+		return fortigate.BackupOptions{}, output.NewError("validation_error", "--vdom can only be used with --scope vdom", nil)
+	}
+
+	options := fortigate.BackupOptions{
+		Scope:      scope,
+		OutputPath: o.outputPath,
+		Overwrite:  o.force,
+		DryRun:     o.dryRun,
+	}
+
+	if scope == fortigate.BackupScopeVDOM {
+		if vdomFlag != nil {
+			options.VDOM = vdomFlag.Value.String()
+		}
+	}
+
+	switch {
+	case allowImplicitStdout:
+		options.Stdout = true
+	case o.outputPath == "":
+		return fortigate.BackupOptions{}, output.NewError("validation_error", "--output is required", nil)
+	case o.outputPath == "-":
+		options.Stdout = true
+	}
+
+	return options, nil
+}
+
+func parseBackupScope(raw string) (fortigate.BackupScope, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "", string(fortigate.BackupScopeGlobal):
+		return fortigate.BackupScopeGlobal, nil
+	case string(fortigate.BackupScopeVDOM):
+		return fortigate.BackupScopeVDOM, nil
+	default:
+		return "", output.NewError("validation_error", fmt.Sprintf("unsupported backup scope: %s", raw), nil)
+	}
 }
 
 func newSystemHostnameCommand(rootOpts *rootOptions) *cobra.Command {

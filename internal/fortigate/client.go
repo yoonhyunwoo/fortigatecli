@@ -43,6 +43,28 @@ type PageOptions struct {
 	PageSize int
 }
 
+type BackupScope string
+
+const (
+	BackupScopeGlobal BackupScope = "global"
+	BackupScopeVDOM   BackupScope = "vdom"
+)
+
+type BackupOptions struct {
+	Scope      BackupScope
+	VDOM       string
+	OutputPath string
+	Overwrite  bool
+	DryRun     bool
+	Stdout     bool
+}
+
+type BackupPlan struct {
+	URL   string
+	Scope BackupScope
+	VDOM  string
+}
+
 type Client struct {
 	baseURL    *url.URL
 	token      string
@@ -312,14 +334,40 @@ func (c *Client) GetDiscoveryCapabilities(ctx context.Context, target DiscoveryT
 }
 
 func (c *Client) Backup(ctx context.Context) ([]byte, error) {
+	return c.BackupWithOptions(ctx, BackupOptions{Scope: BackupScopeGlobal, Stdout: true})
+}
+
+func (c *Client) BackupPlan(options BackupOptions) (*BackupPlan, error) {
+	normalized, err := c.normalizeBackupOptions(options)
+	if err != nil {
+		return nil, err
+	}
+
 	u := *c.baseURL
 	u.Path = "/api/v2/monitor/system/config/backup"
 	query := u.Query()
-	query.Set("scope", "global")
-	query.Set("vdom", c.vdom)
+	query.Set("scope", string(normalized.Scope))
+	if normalized.Scope == BackupScopeVDOM {
+		query.Set("vdom", normalized.VDOM)
+	} else {
+		query.Del("vdom")
+	}
 	u.RawQuery = query.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	return &BackupPlan{
+		URL:   u.String(),
+		Scope: normalized.Scope,
+		VDOM:  normalized.VDOM,
+	}, nil
+}
+
+func (c *Client) BackupWithOptions(ctx context.Context, options BackupOptions) ([]byte, error) {
+	plan, err := c.BackupPlan(options)
+	if err != nil {
+		return nil, err
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, plan.URL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("build backup request: %w", err)
 	}
@@ -368,6 +416,27 @@ func (c *Client) readAcrossVDOMs(ctx context.Context, resourcePath string, optio
 		Mode:    allVDOMsMode,
 		Results: results,
 	}, nil
+}
+
+func (c *Client) normalizeBackupOptions(options BackupOptions) (BackupOptions, error) {
+	normalized := options
+	if normalized.Scope == "" {
+		normalized.Scope = BackupScopeGlobal
+	}
+	switch normalized.Scope {
+	case BackupScopeGlobal:
+		normalized.VDOM = ""
+	case BackupScopeVDOM:
+		if normalized.VDOM == "" {
+			normalized.VDOM = c.vdom
+		}
+		if normalized.VDOM == "" {
+			return BackupOptions{}, fmt.Errorf("backup scope vdom requires a VDOM")
+		}
+	default:
+		return BackupOptions{}, fmt.Errorf("unsupported backup scope: %s", normalized.Scope)
+	}
+	return normalized, nil
 }
 
 func (c *Client) get(ctx context.Context, apiPath string, options ReadOptions, addQueryOptions func(url.Values, ReadOptions)) (*Envelope, error) {
