@@ -13,6 +13,9 @@ func TestSystemReadAliases(t *testing.T) {
 		path string
 		kind string
 	}{
+		{name: "admins", path: "system/admin", kind: "cmdb"},
+		{name: "dns", path: "system/dns", kind: "cmdb"},
+		{name: "ntp", path: "system/ntp", kind: "cmdb"},
 		{name: "interfaces", path: "system/interface", kind: "monitor"},
 		{name: "vdoms", path: "system/vdom", kind: "cmdb"},
 		{name: "ha-status", path: "system/ha-status", kind: "monitor"},
