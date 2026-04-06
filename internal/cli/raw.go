@@ -30,6 +30,14 @@ func newRawCommand(rootOpts *rootOptions) *cobra.Command {
 			ctx, cancel := commandContext()
 			defer cancel()
 
+			if readOpts.allVDOMs {
+				envelope, err := client.RawGetAcrossVDOMs(ctx, args[0], readOpts.toAPIOptions())
+				if err != nil {
+					return err
+				}
+				return render(cmd, rootOpts.output, envelope)
+			}
+
 			envelope, err := client.RawGet(ctx, args[0], readOpts.toAPIOptions())
 			if err != nil {
 				return err

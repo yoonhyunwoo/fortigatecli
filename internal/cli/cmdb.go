@@ -66,6 +66,14 @@ func runCMDB(rootOpts *rootOptions, cmd *cobra.Command, resourcePath string, rea
 	ctx, cancel := commandContext()
 	defer cancel()
 
+	if readOpts.allVDOMs {
+		envelope, err := client.GetCMDBAcrossVDOMs(ctx, resourcePath, readOpts.toAPIOptions())
+		if err != nil {
+			return err
+		}
+		return render(cmd, rootOpts.output, envelope)
+	}
+
 	envelope, err := client.GetCMDB(ctx, resourcePath, readOpts.toAPIOptions())
 	if err != nil {
 		return err

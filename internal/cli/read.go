@@ -35,6 +35,7 @@ type readOptions struct {
 	limit      int
 	withMeta   bool
 	datasource bool
+	allVDOMs   bool
 	watch      bool
 	follow     bool
 	interval   time.Duration
@@ -70,6 +71,7 @@ func bindReadFlags(cmd *cobra.Command, opts *readOptions) {
 	cmd.Flags().IntVar(&opts.count, "count", -1, "result count limit")
 	cmd.Flags().BoolVar(&opts.withMeta, "with-meta", false, "request metadata in the response")
 	cmd.Flags().BoolVar(&opts.datasource, "datasource", false, "request FortiGate datasource expansion")
+	cmd.Flags().BoolVar(&opts.allVDOMs, "all-vdoms", false, "read across all configured VDOMs")
 }
 
 func bindMonitorReadFlags(cmd *cobra.Command, opts *readOptions) {

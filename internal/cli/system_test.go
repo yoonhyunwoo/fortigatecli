@@ -66,3 +66,23 @@ func TestSystemMonitorCompatibilitySpecs(t *testing.T) {
 		}
 	}
 }
+
+func TestReadFlagsSupportAllVDOMs(t *testing.T) {
+	root := newRootCommand()
+	tests := [][]string{
+		{"cmdb", "get"},
+		{"cmdb", "list"},
+		{"monitor", "get"},
+		{"raw", "get"},
+	}
+
+	for _, path := range tests {
+		cmd, _, err := root.Find(path)
+		if err != nil {
+			t.Fatalf("Find(%v) error = %v", path, err)
+		}
+		if cmd.Flags().Lookup("all-vdoms") == nil {
+			t.Fatalf("%v missing --all-vdoms flag", path)
+		}
+	}
+}

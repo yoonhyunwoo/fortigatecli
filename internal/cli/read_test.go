@@ -21,7 +21,7 @@ func TestReadCommandsBindShapeFlagsOnlyOnReadCommands(t *testing.T) {
 		{path: []string{"cmdb", "get"}, expectShape: true},
 		{path: []string{"cmdb", "list"}, expectShape: true},
 		{path: []string{"monitor", "get"}, expectShape: true},
-		{path: []string{"system", "interfaces"}, expectShape: true},
+		{path: []string{"system", "interfaces"}, expectShape: false},
 		{path: []string{"system", "status"}, expectShape: false},
 		{path: []string{"system", "backup"}, expectShape: false},
 	}

@@ -523,3 +523,126 @@ func TestGetDiscoveryCapabilitiesProbeReflectsSchemaSupport(t *testing.T) {
 		t.Fatal("SchemaSupported = true, want false")
 	}
 }
+
+func TestWithVDOMReturnsShallowClone(t *testing.T) {
+	client, err := NewClient(Config{
+		BaseURL:  "https://fortigate.example.com",
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	clone := client.WithVDOM("tenant-a")
+	if client.vdom != "root" {
+		t.Fatalf("original vdom = %q", client.vdom)
+	}
+	if clone.vdom != "tenant-a" {
+		t.Fatalf("clone vdom = %q", clone.vdom)
+	}
+	if clone.httpClient != client.httpClient {
+		t.Fatal("expected shallow clone to reuse http client")
+	}
+}
+
+func TestListVDOMsParsesNames(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"status":"success","http_status":200,"results":[{"name":"root"},{"name":"tenant-a"}]}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	got, err := client.ListVDOMs(context.Background())
+	if err != nil {
+		t.Fatalf("ListVDOMs() error = %v", err)
+	}
+
+	want := []string{"root", "tenant-a"}
+	if !slices.Equal(got, want) {
+		t.Fatalf("ListVDOMs() = %#v, want %#v", got, want)
+	}
+}
+
+func TestGetCMDBAcrossVDOMsCollectsPartialFailures(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/cmdb/system/vdom":
+			_, _ = io.WriteString(w, `{"status":"success","http_status":200,"results":[{"name":"root"},{"name":"tenant-a"}]}`)
+		case "/api/v2/cmdb/firewall/address":
+			switch r.URL.Query().Get("vdom") {
+			case "root":
+				_, _ = io.WriteString(w, `{"status":"success","http_status":200,"results":[{"name":"addr-root"}]}`)
+			case "tenant-a":
+				w.WriteHeader(http.StatusForbidden)
+				_, _ = io.WriteString(w, `{"status":"error","http_status":403,"message":"permission denied"}`)
+			default:
+				t.Fatalf("unexpected vdom %q", r.URL.Query().Get("vdom"))
+			}
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	got, err := client.GetCMDBAcrossVDOMs(context.Background(), "firewall/address", ReadOptions{})
+	if err != nil {
+		t.Fatalf("GetCMDBAcrossVDOMs() error = %v", err)
+	}
+	if got.Mode != allVDOMsMode {
+		t.Fatalf("Mode = %q", got.Mode)
+	}
+	if len(got.Results) != 2 {
+		t.Fatalf("len(Results) = %d", len(got.Results))
+	}
+	if got.Results[0].VDOM != "root" || got.Results[0].Envelope == nil || got.Results[0].Error != "" {
+		t.Fatalf("root result = %#v", got.Results[0])
+	}
+	if got.Results[1].VDOM != "tenant-a" || got.Results[1].Envelope != nil || got.Results[1].Error != "permission denied" {
+		t.Fatalf("tenant result = %#v", got.Results[1])
+	}
+}
+
+func TestRawGetAcrossVDOMsRejectsExplicitVDOMQuery(t *testing.T) {
+	client, err := NewClient(Config{
+		BaseURL:  "https://fortigate.example.com",
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	_, err = client.RawGetAcrossVDOMs(context.Background(), "/api/v2/cmdb/firewall/address?vdom=root", ReadOptions{})
+	if err == nil {
+		t.Fatal("RawGetAcrossVDOMs() error = nil, want error")
+	}
+	if !strings.Contains(err.Error(), "must not include vdom") {
+		t.Fatalf("RawGetAcrossVDOMs() error = %v", err)
+	}
+}

@@ -16,6 +16,18 @@ type Envelope struct {
 	Message    string `json:"message,omitempty"`
 }
 
+type VDOMResult struct {
+	VDOM     string    `json:"vdom"`
+	Envelope *Envelope `json:"envelope,omitempty"`
+	Error    string    `json:"error,omitempty"`
+}
+
+type MultiVDOMEnvelope struct {
+	Path    string       `json:"path"`
+	Mode    string       `json:"mode"`
+	Results []VDOMResult `json:"results"`
+}
+
 type APIError struct {
 	Operation string `json:"operation"`
 	Code      int    `json:"code"`

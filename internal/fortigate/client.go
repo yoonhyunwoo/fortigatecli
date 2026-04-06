@@ -14,6 +14,8 @@ import (
 	"time"
 )
 
+const allVDOMsMode = "all-vdoms"
+
 type Config struct {
 	BaseURL  string
 	Token    string
@@ -83,12 +85,32 @@ func (c *Client) Test(ctx context.Context) (*Envelope, error) {
 	return c.GetMonitor(ctx, "system/status", ReadOptions{})
 }
 
+func (c *Client) WithVDOM(vdom string) *Client {
+	clone := *c
+	if strings.TrimSpace(vdom) != "" {
+		clone.vdom = vdom
+	}
+	return &clone
+}
+
 func (c *Client) GetMonitor(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
 	return c.get(ctx, "/api/v2/monitor/"+strings.TrimPrefix(resourcePath, "/"), options, addReadOptions)
 }
 
+func (c *Client) GetMonitorAcrossVDOMs(ctx context.Context, resourcePath string, options ReadOptions) (*MultiVDOMEnvelope, error) {
+	return c.readAcrossVDOMs(ctx, resourcePath, options, func(client *Client, ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
+		return client.GetMonitor(ctx, resourcePath, options)
+	})
+}
+
 func (c *Client) GetCMDB(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
 	return c.get(ctx, "/api/v2/cmdb/"+strings.TrimPrefix(resourcePath, "/"), options, addReadOptions)
+}
+
+func (c *Client) GetCMDBAcrossVDOMs(ctx context.Context, resourcePath string, options ReadOptions) (*MultiVDOMEnvelope, error) {
+	return c.readAcrossVDOMs(ctx, resourcePath, options, func(client *Client, ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
+		return client.GetCMDB(ctx, resourcePath, options)
+	})
 }
 
 func (c *Client) GetLog(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
@@ -117,6 +139,18 @@ func (c *Client) RawGet(ctx context.Context, apiPath string, options ReadOptions
 	return c.get(ctx, normalized, options, addReadOptions)
 }
 
+func (c *Client) RawGetAcrossVDOMs(ctx context.Context, apiPath string, options ReadOptions) (*MultiVDOMEnvelope, error) {
+	if hasVDOMQuery(apiPath) {
+		return nil, &APIError{
+			Operation: "raw_get",
+			Message:   "raw path must not include vdom query when using all-vdoms",
+		}
+	}
+	return c.readAcrossVDOMs(ctx, apiPath, options, func(client *Client, ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
+		return client.RawGet(ctx, resourcePath, options)
+	})
+}
+
 func (c *Client) GetVPNIPsecStatus(ctx context.Context, options ReadOptions) (*Envelope, error) {
 	return c.GetMonitor(ctx, "vpn/ipsec", options)
 }
@@ -138,6 +172,30 @@ func (c *Client) ListSSLVPNSessions(ctx context.Context, options ReadOptions) (*
 	return c.GetMonitor(ctx, "vpn/ssl", options)
 }
 
+func (c *Client) ListVDOMs(ctx context.Context) ([]string, error) {
+	envelope, err := c.GetCMDB(ctx, "system/vdom", ReadOptions{})
+	if err != nil {
+		return nil, err
+	}
+	entries, ok := envelope.Results.([]any)
+	if !ok {
+		return nil, fmt.Errorf("decode vdom list: unexpected result type %T", envelope.Results)
+	}
+	vdoms := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		item, ok := entry.(map[string]any)
+		if !ok {
+			return nil, fmt.Errorf("decode vdom list: unexpected entry type %T", entry)
+		}
+		name, ok := item["name"].(string)
+		if !ok || name == "" {
+			return nil, fmt.Errorf("decode vdom list: missing vdom name")
+		}
+		vdoms = append(vdoms, name)
+	}
+	return vdoms, nil
+}
+
 func (c *Client) GetDiscoverySchema(ctx context.Context, target DiscoveryTarget, resourcePath string, options DiscoverySchemaOptions) (*SchemaReport, error) {
 	apiPath, err := discoveryAPIPath(target, resourcePath)
 	if err != nil {
@@ -145,7 +203,7 @@ func (c *Client) GetDiscoverySchema(ctx context.Context, target DiscoveryTarget,
 	}
 
 	schemaPath := apiPath + "?action=schema"
-	envelope, err := c.get(ctx, schemaPath, ReadOptions{WithMeta: options.WithMeta})
+	envelope, err := c.get(ctx, schemaPath, ReadOptions{WithMeta: options.WithMeta}, addReadOptions)
 	if err != nil {
 		if apiErr, ok := err.(*APIError); ok && isUnsupportedSchemaError(apiErr) {
 			return &SchemaReport{
@@ -268,6 +326,32 @@ func (c *Client) Backup(ctx context.Context) ([]byte, error) {
 	return body, nil
 }
 
+type readFunc func(*Client, context.Context, string, ReadOptions) (*Envelope, error)
+
+func (c *Client) readAcrossVDOMs(ctx context.Context, resourcePath string, options ReadOptions, reader readFunc) (*MultiVDOMEnvelope, error) {
+	vdoms, err := c.ListVDOMs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	results := make([]VDOMResult, 0, len(vdoms))
+	for _, vdom := range vdoms {
+		envelope, readErr := reader(c.WithVDOM(vdom), ctx, resourcePath, options)
+		result := VDOMResult{
+			VDOM:     vdom,
+			Envelope: envelope,
+		}
+		if readErr != nil {
+			result.Error = readErr.Error()
+		}
+		results = append(results, result)
+	}
+	return &MultiVDOMEnvelope{
+		Path:    resourcePath,
+		Mode:    allVDOMsMode,
+		Results: results,
+	}, nil
+}
+
 func (c *Client) get(ctx context.Context, apiPath string, options ReadOptions, addQueryOptions func(url.Values, ReadOptions)) (*Envelope, error) {
 	parsedPath, err := url.Parse(apiPath)
 	if err != nil {
@@ -384,6 +468,14 @@ func addLogReadOptions(query url.Values, options ReadOptions) {
 	if options.Datasource {
 		query.Set("datasource", "true")
 	}
+}
+
+func hasVDOMQuery(apiPath string) bool {
+	parsedPath, err := url.Parse(apiPath)
+	if err != nil {
+		return false
+	}
+	return parsedPath.Query().Has("vdom")
 }
 
 func discoveryAPIPath(target DiscoveryTarget, resourcePath string) (string, error) {
