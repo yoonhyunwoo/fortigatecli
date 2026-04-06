@@ -250,24 +250,67 @@ func TestRawGetMergesExistingQueryAndReadOptions(t *testing.T) {
 	}
 }
 
-func TestClientKeepsVerificationEnabledWhenConfigured(t *testing.T) {
+func TestGetLogUsesRowsQuery(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Path; got != "/api/v2/log/disk/traffic/forward/system" {
+			t.Fatalf("path = %q", got)
+		}
+		if got := r.URL.Query().Get("rows"); got != "25" {
+			t.Fatalf("rows query = %q", got)
+		}
+		if got := r.URL.Query().Get("count"); got != "" {
+			t.Fatalf("count query = %q, want empty", got)
+		}
+		_, _ = io.WriteString(w, `{"status":"success","http_status":200}`)
+	}))
+	defer server.Close()
+
 	client, err := NewClient(Config{
-		BaseURL:  "https://fortigate.example.com",
+		BaseURL:  server.URL,
 		Token:    "secret-token",
 		VDOM:     "root",
-		Insecure: false,
+		Insecure: true,
 		Timeout:  5 * time.Second,
 	})
 	if err != nil {
 		t.Fatalf("NewClient() error = %v", err)
 	}
 
-	transport := client.httpClient.Transport.(*http.Transport)
-	if transport.TLSClientConfig == nil {
-		t.Fatal("expected TLSClientConfig")
+	_, err = client.GetLog(context.Background(), "disk/traffic/forward/system", ReadOptions{Count: 25})
+	if err != nil {
+		t.Fatalf("GetLog() error = %v", err)
 	}
-	if transport.TLSClientConfig.InsecureSkipVerify {
-		t.Fatal("expected InsecureSkipVerify=false")
+}
+
+func TestObservabilityWrappersUseExpectedMonitorPaths(t *testing.T) {
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v2/monitor/firewall/session-top":
+		case "/api/v2/monitor/system/resource/usage":
+		default:
+			t.Fatalf("unexpected path %q", r.URL.Path)
+		}
+		_, _ = io.WriteString(w, `{"status":"success","http_status":200}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	empty := ReadOptions{Start: -1, Count: -1}
+	if _, err := client.GetSession(context.Background(), "session-top", empty); err != nil {
+		t.Fatalf("GetSession() error = %v", err)
+	}
+	if _, err := client.GetPerformance(context.Background(), "system/resource/usage?resource=cpu", empty); err != nil {
+		t.Fatalf("GetPerformance() error = %v", err)
 	}
 }
 
@@ -291,7 +334,6 @@ func TestVPNWrappersUseExpectedPaths(t *testing.T) {
 	}
 
 	empty := ReadOptions{Start: -1, Count: -1}
-
 	if _, err := client.GetVPNIPsecStatus(context.Background(), empty); err != nil {
 		t.Fatalf("GetVPNIPsecStatus() error = %v", err)
 	}

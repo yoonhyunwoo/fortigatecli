@@ -83,11 +83,23 @@ func (c *Client) Test(ctx context.Context) (*Envelope, error) {
 }
 
 func (c *Client) GetMonitor(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
-	return c.get(ctx, "/api/v2/monitor/"+strings.TrimPrefix(resourcePath, "/"), options)
+	return c.get(ctx, "/api/v2/monitor/"+strings.TrimPrefix(resourcePath, "/"), options, addReadOptions)
 }
 
 func (c *Client) GetCMDB(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
-	return c.get(ctx, "/api/v2/cmdb/"+strings.TrimPrefix(resourcePath, "/"), options)
+	return c.get(ctx, "/api/v2/cmdb/"+strings.TrimPrefix(resourcePath, "/"), options, addReadOptions)
+}
+
+func (c *Client) GetLog(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
+	return c.get(ctx, "/api/v2/log/"+strings.TrimPrefix(resourcePath, "/"), options, addLogReadOptions)
+}
+
+func (c *Client) GetSession(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
+	return c.get(ctx, "/api/v2/monitor/firewall/"+strings.TrimPrefix(resourcePath, "/"), options, addReadOptions)
+}
+
+func (c *Client) GetPerformance(ctx context.Context, resourcePath string, options ReadOptions) (*Envelope, error) {
+	return c.get(ctx, "/api/v2/monitor/"+strings.TrimPrefix(resourcePath, "/"), options, addReadOptions)
 }
 
 func (c *Client) RawGet(ctx context.Context, apiPath string, options ReadOptions) (*Envelope, error) {
@@ -101,7 +113,7 @@ func (c *Client) RawGet(ctx context.Context, apiPath string, options ReadOptions
 	if !strings.HasPrefix(normalized, "/") {
 		normalized = "/" + normalized
 	}
-	return c.get(ctx, normalized, options)
+	return c.get(ctx, normalized, options, addReadOptions)
 }
 
 func (c *Client) GetVPNIPsecStatus(ctx context.Context, options ReadOptions) (*Envelope, error) {
@@ -158,7 +170,7 @@ func (c *Client) Backup(ctx context.Context) ([]byte, error) {
 	return body, nil
 }
 
-func (c *Client) get(ctx context.Context, apiPath string, options ReadOptions) (*Envelope, error) {
+func (c *Client) get(ctx context.Context, apiPath string, options ReadOptions, addQueryOptions func(url.Values, ReadOptions)) (*Envelope, error) {
 	parsedPath, err := url.Parse(apiPath)
 	if err != nil {
 		return nil, fmt.Errorf("parse API path: %w", err)
@@ -168,7 +180,7 @@ func (c *Client) get(ctx context.Context, apiPath string, options ReadOptions) (
 	u.Path = path.Clean(strings.TrimSuffix(c.baseURL.Path, "/") + "/" + strings.TrimPrefix(parsedPath.Path, "/"))
 	query := parsedPath.Query()
 	query.Set("vdom", c.vdom)
-	addReadOptions(query, options)
+	addQueryOptions(query, options)
 	u.RawQuery = query.Encode()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
@@ -234,6 +246,39 @@ func addReadOptions(query url.Values, options ReadOptions) {
 	}
 	if options.Count >= 0 {
 		query.Set("count", fmt.Sprintf("%d", options.Count))
+	}
+	if options.WithMeta {
+		query.Set("with_meta", "true")
+	}
+	if options.Datasource {
+		query.Set("datasource", "true")
+	}
+}
+
+func addLogReadOptions(query url.Values, options ReadOptions) {
+	for _, filter := range options.Filters {
+		if filter != "" {
+			query.Add("filter", filter)
+		}
+	}
+	if len(options.Fields) > 0 {
+		query.Set("fields", strings.Join(options.Fields, ","))
+	}
+	for _, format := range options.Formats {
+		if format != "" {
+			query.Add("format", format)
+		}
+	}
+	for _, sortValue := range options.Sort {
+		if sortValue != "" {
+			query.Add("sort", sortValue)
+		}
+	}
+	if options.Start >= 0 {
+		query.Set("start", fmt.Sprintf("%d", options.Start))
+	}
+	if options.Count >= 0 {
+		query.Set("rows", fmt.Sprintf("%d", options.Count))
 	}
 	if options.WithMeta {
 		query.Set("with_meta", "true")

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/signal"
 	"time"
 
 	"fortigatecli/internal/config"
@@ -21,7 +22,9 @@ type rootOptions struct {
 
 func Execute() int {
 	cmd := newRootCommand()
-	if err := cmd.Execute(); err != nil {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	defer stop()
+	if err := cmd.ExecuteContext(ctx); err != nil {
 		output.WriteError(normalizeError(err))
 		return exitCode(err)
 	}
@@ -42,6 +45,7 @@ func newRootCommand() *cobra.Command {
 
 	cmd.AddCommand(
 		newAuthCommand(opts),
+		newLogsCommand(opts),
 		newSystemCommand(opts),
 		newRoutingCommand(opts),
 		newFirewallCommand(opts),
