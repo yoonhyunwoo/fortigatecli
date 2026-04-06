@@ -97,6 +97,7 @@ func newSystemBackupCommand(rootOpts *rootOptions) *cobra.Command {
 
 func newSystemAliasCommand(rootOpts *rootOptions, alias systemAlias) *cobra.Command {
 	readOpts := newReadOptions()
+	shapeOpts := newShapeOptions()
 	cmd := &cobra.Command{
 		Use:   alias.use,
 		Short: alias.short,
@@ -125,10 +126,11 @@ func newSystemAliasCommand(rootOpts *rootOptions, alias systemAlias) *cobra.Comm
 				return err
 			}
 
-			return render(cmd, rootOpts.output, envelope)
+			return renderRead(cmd, rootOpts.output, envelope, shapeOpts)
 		},
 	}
 	bindReadFlags(cmd, readOpts)
+	bindShapeFlags(cmd, shapeOpts)
 	setDefaultStreams(cmd)
 	return cmd
 }

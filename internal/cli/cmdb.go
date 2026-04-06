@@ -20,35 +20,39 @@ func newCMDBCommand(rootOpts *rootOptions) *cobra.Command {
 
 func newCMDBGetCommand(rootOpts *rootOptions) *cobra.Command {
 	readOpts := newReadOptions()
+	shapeOpts := newShapeOptions()
 	cmd := &cobra.Command{
 		Use:   "get <path>",
 		Short: "Get a CMDB resource",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCMDB(rootOpts, cmd, args[0], readOpts)
+			return runCMDB(rootOpts, cmd, args[0], readOpts, shapeOpts)
 		},
 	}
 	bindReadFlags(cmd, readOpts)
+	bindShapeFlags(cmd, shapeOpts)
 	setDefaultStreams(cmd)
 	return cmd
 }
 
 func newCMDBListCommand(rootOpts *rootOptions) *cobra.Command {
 	readOpts := newReadOptions()
+	shapeOpts := newShapeOptions()
 	cmd := &cobra.Command{
 		Use:   "list <path>",
 		Short: "List CMDB resources",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return runCMDB(rootOpts, cmd, args[0], readOpts)
+			return runCMDB(rootOpts, cmd, args[0], readOpts, shapeOpts)
 		},
 	}
 	bindReadFlags(cmd, readOpts)
+	bindShapeFlags(cmd, shapeOpts)
 	setDefaultStreams(cmd)
 	return cmd
 }
 
-func runCMDB(rootOpts *rootOptions, cmd *cobra.Command, resourcePath string, readOpts *readOptions) error {
+func runCMDB(rootOpts *rootOptions, cmd *cobra.Command, resourcePath string, readOpts *readOptions, shapeOpts *shapeOptions) error {
 	cfg, err := loadRuntimeConfig(rootOpts.vdom)
 	if err != nil {
 		return err
@@ -67,5 +71,5 @@ func runCMDB(rootOpts *rootOptions, cmd *cobra.Command, resourcePath string, rea
 		return err
 	}
 
-	return render(cmd, rootOpts.output, envelope)
+	return renderRead(cmd, rootOpts.output, envelope, shapeOpts)
 }

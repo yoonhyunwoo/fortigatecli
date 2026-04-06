@@ -8,6 +8,7 @@ import (
 
 func newMonitorCommand(rootOpts *rootOptions) *cobra.Command {
 	readOpts := newReadOptions()
+	shapeOpts := newShapeOptions()
 	cmd := &cobra.Command{
 		Use: "monitor",
 	}
@@ -35,10 +36,11 @@ func newMonitorCommand(rootOpts *rootOptions) *cobra.Command {
 				return err
 			}
 
-			return render(cmd, rootOpts.output, envelope)
+			return renderRead(cmd, rootOpts.output, envelope, shapeOpts)
 		},
 	})
 	bindReadFlags(cmd.Commands()[0], readOpts)
+	bindShapeFlags(cmd.Commands()[0], shapeOpts)
 	setDefaultStreams(cmd)
 	return cmd
 }
