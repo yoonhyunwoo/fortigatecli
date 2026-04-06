@@ -270,3 +270,57 @@ func TestClientKeepsVerificationEnabledWhenConfigured(t *testing.T) {
 		t.Fatal("expected InsecureSkipVerify=false")
 	}
 }
+
+func TestVPNWrappersUseExpectedPaths(t *testing.T) {
+	var paths []string
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path+"?"+r.URL.RawQuery)
+		_, _ = io.WriteString(w, `{"status":"success","http_status":200}`)
+	}))
+	defer server.Close()
+
+	client, err := NewClient(Config{
+		BaseURL:  server.URL,
+		Token:    "secret-token",
+		VDOM:     "root",
+		Insecure: true,
+		Timeout:  5 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewClient() error = %v", err)
+	}
+
+	empty := ReadOptions{Start: -1, Count: -1}
+
+	if _, err := client.GetVPNIPsecStatus(context.Background(), empty); err != nil {
+		t.Fatalf("GetVPNIPsecStatus() error = %v", err)
+	}
+	if _, err := client.ListVPNIPsecTunnels(context.Background(), empty); err != nil {
+		t.Fatalf("ListVPNIPsecTunnels() error = %v", err)
+	}
+	if _, err := client.GetVPNIPsecTunnel(context.Background(), "to-branch", empty); err != nil {
+		t.Fatalf("GetVPNIPsecTunnel() error = %v", err)
+	}
+	if _, err := client.GetSSLVPNSettings(context.Background(), empty); err != nil {
+		t.Fatalf("GetSSLVPNSettings() error = %v", err)
+	}
+	if _, err := client.ListSSLVPNSessions(context.Background(), empty); err != nil {
+		t.Fatalf("ListSSLVPNSessions() error = %v", err)
+	}
+
+	wantContains := []string{
+		"/api/v2/monitor/vpn/ipsec?vdom=root",
+		"/api/v2/monitor/vpn/ipsec?vdom=root",
+		"/api/v2/monitor/vpn/ipsec?filter=name%3D%3Dto-branch&vdom=root",
+		"/api/v2/cmdb/vpn.ssl/settings?vdom=root",
+		"/api/v2/monitor/vpn/ssl?vdom=root",
+	}
+	if len(paths) != len(wantContains) {
+		t.Fatalf("paths len = %d, want %d (%v)", len(paths), len(wantContains), paths)
+	}
+	for i, want := range wantContains {
+		if paths[i] != want {
+			t.Fatalf("path[%d] = %q, want %q", i, paths[i], want)
+		}
+	}
+}
