@@ -8,27 +8,48 @@ func TestSystemReadAliases(t *testing.T) {
 		got[alias.use] = alias
 	}
 
+	alias, ok := got["vdoms"]
+	if !ok {
+		t.Fatal("missing alias \"vdoms\"")
+	}
+	if alias.path != "system/vdom" {
+		t.Fatalf("vdoms path = %q", alias.path)
+	}
+	if alias.kind != "cmdb" {
+		t.Fatalf("vdoms kind = %q", alias.kind)
+	}
+}
+
+func TestSystemMonitorCompatibilitySpecs(t *testing.T) {
 	tests := []struct {
 		name string
 		path string
-		kind string
 	}{
-		{name: "interfaces", path: "system/interface", kind: "monitor"},
-		{name: "vdoms", path: "system/vdom", kind: "cmdb"},
-		{name: "ha-status", path: "system/ha-status", kind: "monitor"},
-		{name: "license", path: "license/status", kind: "monitor"},
+		{name: "status", path: "system/status"},
+		{name: "interfaces", path: "system/interface"},
+		{name: "ha-status", path: "system/ha-status"},
+		{name: "license", path: "license/status"},
+	}
+
+	got := map[string]monitorEndpointSpec{}
+	for _, spec := range systemMonitorCompatibilitySpecs() {
+		got[spec.use] = spec
 	}
 
 	for _, tc := range tests {
-		alias, ok := got[tc.name]
+		spec, ok := got[tc.name]
 		if !ok {
-			t.Fatalf("missing alias %q", tc.name)
+			t.Fatalf("missing compatibility spec %q", tc.name)
 		}
-		if alias.path != tc.path {
-			t.Fatalf("%s path = %q, want %q", tc.name, alias.path, tc.path)
+		if spec.path != tc.path {
+			t.Fatalf("%s path = %q, want %q", tc.name, spec.path, tc.path)
 		}
-		if alias.kind != tc.kind {
-			t.Fatalf("%s kind = %q, want %q", tc.name, alias.kind, tc.kind)
+		canonical, ok := monitorEndpointSpecByUse(tc.name)
+		if !ok {
+			t.Fatalf("missing canonical monitor spec %q", tc.name)
+		}
+		if spec.capabilities != canonical.capabilities {
+			t.Fatalf("%s capabilities = %v, want %v", tc.name, spec.capabilities, canonical.capabilities)
 		}
 	}
 }
