@@ -45,6 +45,7 @@ func newRootCommand() *cobra.Command {
 		newSystemCommand(opts),
 		newCMDBCommand(opts),
 		newMonitorCommand(opts),
+		newDiscoveryCommand(opts),
 		newRawCommand(opts),
 		newVersionCommand(),
 	)
