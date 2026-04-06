@@ -6,14 +6,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-type systemAlias struct {
-	use   string
-	short string
-	path  string
-	kind  string
-}
-
-var systemReadAliases = []systemAlias{
+var systemReadAliases = []readAlias{
 	{use: "interfaces", short: "List system interfaces", path: "system/interface", kind: "monitor"},
 	{use: "vdoms", short: "List configured VDOMs", path: "system/vdom", kind: "cmdb"},
 	{use: "ha-status", short: "Fetch HA status", path: "system/ha-status", kind: "monitor"},
@@ -30,7 +23,7 @@ func newSystemCommand(rootOpts *rootOptions) *cobra.Command {
 		newSystemBackupCommand(rootOpts),
 	)
 	for _, alias := range systemReadAliases {
-		systemCmd.AddCommand(newSystemAliasCommand(rootOpts, alias))
+		systemCmd.AddCommand(newReadAliasCommand(rootOpts, alias))
 	}
 	return systemCmd
 }
@@ -91,44 +84,6 @@ func newSystemBackupCommand(rootOpts *rootOptions) *cobra.Command {
 			return writeStdout(cmd, data)
 		},
 	}
-	setDefaultStreams(cmd)
-	return cmd
-}
-
-func newSystemAliasCommand(rootOpts *rootOptions, alias systemAlias) *cobra.Command {
-	readOpts := newReadOptions()
-	cmd := &cobra.Command{
-		Use:   alias.use,
-		Short: alias.short,
-		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := loadRuntimeConfig(rootOpts.vdom)
-			if err != nil {
-				return err
-			}
-
-			client, err := newClient(cfg)
-			if err != nil {
-				return output.NewError("client_error", err.Error(), nil)
-			}
-
-			ctx, cancel := commandContext()
-			defer cancel()
-
-			var envelope any
-			switch alias.kind {
-			case "cmdb":
-				envelope, err = client.GetCMDB(ctx, alias.path, readOpts.toAPIOptions())
-			default:
-				envelope, err = client.GetMonitor(ctx, alias.path, readOpts.toAPIOptions())
-			}
-			if err != nil {
-				return err
-			}
-
-			return render(cmd, rootOpts.output, envelope)
-		},
-	}
-	bindReadFlags(cmd, readOpts)
 	setDefaultStreams(cmd)
 	return cmd
 }

@@ -2,9 +2,17 @@ package cli
 
 import (
 	"fortigatecli/internal/fortigate"
+	"fortigatecli/internal/output"
 
 	"github.com/spf13/cobra"
 )
+
+type readAlias struct {
+	use   string
+	short string
+	path  string
+	kind  string
+}
 
 type readOptions struct {
 	filters    []string
@@ -46,4 +54,42 @@ func (o *readOptions) toAPIOptions() fortigate.ReadOptions {
 		WithMeta:   o.withMeta,
 		Datasource: o.datasource,
 	}
+}
+
+func newReadAliasCommand(rootOpts *rootOptions, alias readAlias) *cobra.Command {
+	readOpts := newReadOptions()
+	cmd := &cobra.Command{
+		Use:   alias.use,
+		Short: alias.short,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := loadRuntimeConfig(rootOpts.vdom)
+			if err != nil {
+				return err
+			}
+
+			client, err := newClient(cfg)
+			if err != nil {
+				return output.NewError("client_error", err.Error(), nil)
+			}
+
+			ctx, cancel := commandContext()
+			defer cancel()
+
+			var envelope any
+			switch alias.kind {
+			case "cmdb":
+				envelope, err = client.GetCMDB(ctx, alias.path, readOpts.toAPIOptions())
+			default:
+				envelope, err = client.GetMonitor(ctx, alias.path, readOpts.toAPIOptions())
+			}
+			if err != nil {
+				return err
+			}
+
+			return render(cmd, rootOpts.output, envelope)
+		},
+	}
+	bindReadFlags(cmd, readOpts)
+	setDefaultStreams(cmd)
+	return cmd
 }
